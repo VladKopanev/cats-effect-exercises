@@ -31,10 +31,20 @@ object WorkerPoolDemo extends IOApp {
       List.range(0, 10)
         .traverse(mkWorker)
         .flatMap(WorkerPool.of[Int, Int, IO])
-    for {
+    val test1 = for {
       pool <- testPool
       _ <- List.range(0, 1000).map(i => pool.exec(i)).parSequence.void
     } yield ExitCode.Success
+
+    //should not terminate
+    val test2 = for {
+      pool <- WorkerPool.of[Unit, Unit, IO]((a: Unit) => IO.sleep(2.seconds))
+      _    <- pool.exec(()).start
+      _    <- pool.removeAllWorkers
+      _    <- pool.exec(())
+    } yield ExitCode.Error
+
+    test1
 
   }
 }
