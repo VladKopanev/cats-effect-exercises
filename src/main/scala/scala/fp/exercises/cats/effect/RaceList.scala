@@ -6,6 +6,7 @@ import cats.effect.{ContextShift, ExitCase, ExitCode, Fiber, IO, IOApp, Timer}
 import cats.implicits._
 
 import scala.concurrent.duration._
+import scala.fp.exercises.cats.effect.RaceList.CompositeException
 import scala.util.Random
 
 object RaceList extends IOApp {
@@ -27,7 +28,7 @@ object RaceList extends IOApp {
   }
 
   // Use this class for reporting all failures.
-  case class CompositeException (ex: NonEmptyList[Throwable]) extends Exception("All race candidates have failed")
+  case class CompositeException(ex: NonEmptyList[Throwable]) extends Exception("All race candidates have failed")
 
 
   override def run(args: List[String]): IO[ExitCode] = for {
@@ -47,19 +48,22 @@ object RaceList extends IOApp {
 
 object Race {
   def raceToSuccess[A](ios: NonEmptyList[IO[A]])(implicit cs: ContextShift[IO]): IO[A] = {
-    (Ref.of[IO, Int](0), Deferred[IO, A]).tupled.flatMap { case (failCounter, promise) =>
+    (Ref.of[IO, List[Throwable]](List.empty), Deferred[IO, A]).tupled.flatMap { case (failedList, promise) =>
 
-      def startTask(io: IO[A]): IO[Fiber[IO, Unit]] = (io >>= promise.complete).start
+      def startTask(io: IO[A], promiseFiber: Fiber[IO, A]): IO[Fiber[IO, Unit]] =
+        (io.handleErrorWith(failTask(_, promiseFiber)) >>= promise.complete).start
 
-      def failTask(e: Throwable) = for {
-        _ <- failCounter.update(_ + 1)
-        failed <- failCounter.get
-        _ <- if(failed >= ios.size) IO(???) else IO()
-      } yield ()
+      def failTask(e: Throwable, promiseFiber: Fiber[IO, A]): IO[A] = (for {
+        _ <- failedList.update(e :: _)
+        failed <- failedList.get
+        err <- if(failed.size >= ios.size)
+          promiseFiber.cancel.map(_ => CompositeException(NonEmptyList.fromListUnsafe(failed)))
+        else IO.pure(e)
+      } yield err) >>= IO.raiseError[A]
 
       for {
-        fibers <- ios.traverse(startTask)
         rFiber <- promise.get.start
+        fibers <- ios.traverse(startTask(_, rFiber))
         result <- rFiber.join
         _ <- fibers.traverse(_.cancel.asInstanceOf[IO[Unit]])
       } yield result
