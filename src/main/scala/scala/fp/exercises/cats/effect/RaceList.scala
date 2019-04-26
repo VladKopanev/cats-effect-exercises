@@ -16,7 +16,7 @@ object RaceList extends IOApp {
     val proc = for {
       dur <- IO { Random.nextInt(500) }
       _   <- IO.sleep { (100 + dur).millis }
-      _   <- IO { if (true) throw new Exception(s"Error in $name") }
+      _   <- IO { if (Random.nextBoolean()) throw new Exception(s"Error in $name") }
       txt <- IO { Random.alphanumeric.take(16).mkString }
     } yield Data(name, txt)
 
@@ -52,10 +52,10 @@ object Race {
     (Ref.of[IO, List[Throwable]](List.empty), Deferred[IO, EResult])
       .tupled.flatMap { case (failedList, promise) =>
 
-      def startTask(io: IO[A], promiseFiber: Fiber[IO, EResult]): IO[Fiber[IO, Unit]] =
-        (io.map(Right(_)).handleErrorWith(failTask(_, promiseFiber)) >>= promise.complete).start
+      def startTask(io: IO[A]): IO[Fiber[IO, Unit]] =
+        (io.map(Right(_)).handleErrorWith(failTask) >>= promise.complete).start
 
-      def failTask(e: Throwable, promiseFiber: Fiber[IO, EResult]): IO[EResult] = for {
+      def failTask(e: Throwable): IO[EResult] = for {
         _ <- failedList.update(e :: _)
         failed <- failedList.get
         res <- if (failed.size >= ios.size)
@@ -65,7 +65,7 @@ object Race {
 
       for {
         rFiber <- promise.get.start
-        fibers <- ios.traverse(startTask(_, rFiber))
+        fibers <- ios.traverse(startTask)
         eitherResult <- rFiber.join
         _ <- fibers.traverse(_.cancel.asInstanceOf[IO[Unit]])
         result <- eitherResult.fold(IO.raiseError, IO.pure)
