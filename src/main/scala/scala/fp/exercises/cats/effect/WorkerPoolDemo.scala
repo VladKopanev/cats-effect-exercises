@@ -44,7 +44,7 @@ object WorkerPoolDemo extends IOApp {
       _    <- pool.exec(())
     } yield ExitCode.Error
 
-    test1
+    test2
 
   }
 }

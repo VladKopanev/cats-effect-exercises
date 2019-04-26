@@ -48,24 +48,27 @@ object RaceList extends IOApp {
 
 object Race {
   def raceToSuccess[A](ios: NonEmptyList[IO[A]])(implicit cs: ContextShift[IO]): IO[A] = {
-    (Ref.of[IO, List[Throwable]](List.empty), Deferred[IO, A]).tupled.flatMap { case (failedList, promise) =>
+    type EResult =  Either[CompositeException, A]
+    (Ref.of[IO, List[Throwable]](List.empty), Deferred[IO, EResult])
+      .tupled.flatMap { case (failedList, promise) =>
 
-      def startTask(io: IO[A], promiseFiber: Fiber[IO, A]): IO[Fiber[IO, Unit]] =
-        (io.handleErrorWith(failTask(_, promiseFiber)) >>= promise.complete).start
+      def startTask(io: IO[A], promiseFiber: Fiber[IO, EResult]): IO[Fiber[IO, Unit]] =
+        (io.map(Right(_)).handleErrorWith(failTask(_, promiseFiber)) >>= promise.complete).start
 
-      def failTask(e: Throwable, promiseFiber: Fiber[IO, A]): IO[A] = (for {
+      def failTask(e: Throwable, promiseFiber: Fiber[IO, EResult]): IO[EResult] = for {
         _ <- failedList.update(e :: _)
         failed <- failedList.get
-        err <- if(failed.size >= ios.size)
-          promiseFiber.cancel.map(_ => CompositeException(NonEmptyList.fromListUnsafe(failed)))
-        else IO.pure(e)
-      } yield err) >>= IO.raiseError[A]
+        res <- if (failed.size >= ios.size)
+          IO.pure(Left(CompositeException(NonEmptyList.fromListUnsafe(failed))))
+        else IO.raiseError(e)
+      } yield res
 
       for {
         rFiber <- promise.get.start
         fibers <- ios.traverse(startTask(_, rFiber))
-        result <- rFiber.join
+        eitherResult <- rFiber.join
         _ <- fibers.traverse(_.cancel.asInstanceOf[IO[Unit]])
+        result <- eitherResult.fold(IO.raiseError, IO.pure)
       } yield result
     }
   }
