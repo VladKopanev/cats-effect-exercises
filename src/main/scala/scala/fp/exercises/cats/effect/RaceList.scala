@@ -49,8 +49,7 @@ object RaceList extends IOApp {
 object Race {
   def raceToSuccess[A](ios: NonEmptyList[IO[A]])(implicit cs: ContextShift[IO]): IO[A] = {
     type EResult =  Either[CompositeException, A]
-    (Ref.of[IO, List[Throwable]](List.empty), Deferred[IO, EResult])
-      .tupled.flatMap { case (failedList, promise) =>
+    (Ref.of[IO, List[Throwable]](List.empty), Deferred[IO, EResult]).tupled.flatMap { case (failedList, promise) =>
 
       def startTask(io: IO[A]): IO[Fiber[IO, Unit]] =
         (io.map(Right(_)).handleErrorWith(failTask) >>= promise.complete).start
@@ -64,9 +63,8 @@ object Race {
       } yield res
 
       for {
-        rFiber <- promise.get.start
         fibers <- ios.traverse(startTask)
-        eitherResult <- rFiber.join
+        eitherResult <- promise.get
         _ <- fibers.traverse(_.cancel.asInstanceOf[IO[Unit]])
         result <- eitherResult.fold(IO.raiseError, IO.pure)
       } yield result
